@@ -1,5 +1,6 @@
 // Copyright (c) 2019 Cryptogogue, Inc. All Rights Reserved.
 
+import crypto                           from 'crypto';
 import _                                from 'lodash';
 
 //----------------------------------------------------------------//
@@ -45,6 +46,16 @@ export function encodeAccountRequest ( genesis, publicKeyHex ) {
     console.log ( 'ENCODED:', encoded );
 
     return encoded;
+}
+
+//----------------------------------------------------------------//
+export function makeAccountSuffix () {
+
+    // TODO: replace with something deterministic
+    const suffixPart = () => {
+        return crypto.randomBytes ( 2 ).toString ( 'hex' ).substring ( 0, 3 );
+    }
+    return `${ suffixPart ()}.${ suffixPart ()}.${ suffixPart ()}`.toUpperCase ();
 }
 
 //----------------------------------------------------------------//
