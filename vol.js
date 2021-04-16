@@ -32,7 +32,7 @@ export function encodeAccountRequest ( genesis, publicKeyHex ) {
     console.log ( 'ENCODE ACCOUNT REQUEST' );
 
     const request = {
-        genesis:            this.genesis,
+        genesis:            genesis,
         key: {
             type:           'EC_HEX',
             groupName:      'secp256k1',
