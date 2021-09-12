@@ -27,7 +27,7 @@ export function decodeAccountRequest ( encoded ) {
 }
 
 //----------------------------------------------------------------//
-export function encodeAccountRequest ( genesis, publicKeyHex ) {
+export function encodeAccountRequest ( genesis, publicKeyHex, signature ) {
 
     console.log ( 'ENCODE ACCOUNT REQUEST' );
 
@@ -38,6 +38,10 @@ export function encodeAccountRequest ( genesis, publicKeyHex ) {
             groupName:      'secp256k1',
             publicKey:      publicKeyHex,
         },
+    }
+
+    if ( signature ) {
+        request.signature = signature;
     }
 
     const requestJSON   = JSON.stringify ( request );
@@ -76,7 +80,7 @@ export function signTransaction ( key, body, nonce ) {
         body: bodyStr,
         signature: {
             hashAlgorithm:  'SHA256',
-            digest:         key.hash ( bodyStr ),
+            // digest:         key.hash ( bodyStr ),
             signature:      key.sign ( bodyStr ),
         }
     };
