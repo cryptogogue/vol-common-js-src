@@ -53,6 +53,12 @@ export function encodeAccountRequest ( genesis, publicKeyHex, signature ) {
 }
 
 //----------------------------------------------------------------//
+export function format ( vol ) {
+
+    return `${( vol / 1000 ).toFixed ( 3 )}`;
+}
+
+//----------------------------------------------------------------//
 export function makeAccountSuffix () {
 
     // TODO: replace with something deterministic
