@@ -26,7 +26,6 @@ export class ConsensusService {
     @observable digest;
     @observable step;
     @observable isCurrent;
-    @observable isBlocked;
 
     @observable minersByID;
 
@@ -36,6 +35,36 @@ export class ConsensusService {
     @observable ignored         = {};
     @observable timeout         = DEFAULT_TIMEOUT;
     @observable threshold       = DEFAULT_THRESHOLD;
+
+    @computed get               currentMiners           () { return this.onlineMiners.filter (( miner ) => { return miner.digest === this.digest; }); }
+    @computed get               currentURLs             () { return this.currentMiners.map (( miner ) => { return miner.url; }); }
+    @computed get               ignoredMiners           () { return Object.keys ( this.minersByID ).filter (( minerID ) => { return this.ignored [ minerID ]; }); }
+    @computed get               isBlocked               () { return (( this.onlineMiners.length > 0 ) && ( this.currentMiners.length === 0 )); }
+    @computed get               onlineMiners            () { return Object.values ( this.minersByID ).filter (( miner ) => { return ( miner.online && miner.digest && !this.isIgnored ( miner.minerID )); }); }
+    @computed get               onlineURLs              () { return this.onlineMiners.map (( miner ) => { return miner.url; }); }
+
+    //----------------------------------------------------------------//
+    @action
+    async acceptDigest ( digest, height ) {
+
+        console.log ( `@CONENSUS_CONTROL: ACCEPT: ${ this.height } --> ${ height }` );
+
+        this.isCurrent = false;
+
+        const minersByID = _.cloneDeep ( this.minersByID );
+
+        for ( let minerID in minersByID ) {
+            const miner = minersByID [ minerID ];
+            if ( miner.nextDigest === digest ) {
+                miner.height    = height;
+                miner.digest    = digest;
+            }
+        }
+
+        this.minersByID     = minersByID;
+        this.height         = height;
+        this.digest         = digest;
+    }
 
     //----------------------------------------------------------------//
     @action
@@ -85,32 +114,6 @@ export class ConsensusService {
 
         this.revocable = new RevocableContext ();
         this.reset ();
-    }
-
-    //----------------------------------------------------------------//
-    @computed get
-    currentMiners () {
-
-        const miners = [];
-
-        for ( let miner of this.onlineMiners ) {
-            if ( miner.digest === this.digest ) {
-                miners.push ( miner );
-            }
-        }
-        return miners;
-    }
-
-    //----------------------------------------------------------------//
-    @computed get
-    currentURLs () {
-
-        const currentURLs = [];
-
-        for ( let miner of this.currentMiners ) {
-            currentURLs.push ( miner.url );
-        }
-        return currentURLs;
     }
 
     //----------------------------------------------------------------//
@@ -174,7 +177,37 @@ export class ConsensusService {
     }
 
     //----------------------------------------------------------------//
-    formatServiceURL ( base, path, query, mostCurrent ) {
+    static findConsensus ( miners ) {
+
+        const minerCount = miners.length;
+        if ( !minerCount ) return [ false, 0 ]; // no online miners
+
+        let bestCount = 0;
+        let bestDigest = false;
+
+        // build a histogram of digests at next height; also get the rollback count
+        const histogram = {}; // counts by digest
+        for ( let miner of miners ) {
+            if ( !miner.nextDigest ) continue;
+
+            const count = ( histogram [ miner.nextDigest ] || 0 ) + 1;
+            histogram [ miner.nextDigest ] = count;
+
+            if ( bestCount < count ) {
+                bestCount   = count;
+                bestDigest  = miner.nextDigest;
+            }
+            
+            console.log ( `@CONENSUS_CONTROL: ${ miner.minerID } NEXT DIGEST: ${ miner.nextDigest }` );
+        }
+
+        const bestConsensus = bestCount / minerCount;
+
+        return [ bestDigest, bestConsensus ];
+    }
+
+    //----------------------------------------------------------------//
+    static formatServiceURL ( base, path, query, mostCurrent ) {
 
         const serviceURL        = url.parse ( base );
         serviceURL.pathname     = path;
@@ -183,7 +216,6 @@ export class ConsensusService {
         if ( mostCurrent !== true ) {
             serviceURL.query.at = this.height;
         }
-
         return url.format ( serviceURL );
     }
 
@@ -192,7 +224,7 @@ export class ConsensusService {
 
         const currentURLs = this.currentURLs;
         const serviceURL = currentURLs.length ? currentURLs [ Math.floor ( Math.random () * currentURLs.length )] : false;
-        return serviceURL ? this.formatServiceURL ( serviceURL, path, query, mostCurrent ) : false;
+        return serviceURL ? ConsensusService.formatServiceURL ( serviceURL, path, query, mostCurrent ) : false;
     }
 
     //----------------------------------------------------------------//
@@ -201,22 +233,9 @@ export class ConsensusService {
         const urls = [];
 
         for ( let minerID of this.currentMiners ) {
-            urls.push ( this.formatServiceURL ( miner.url, path, query, mostCurrent ));
+            urls.push ( ConsensusService.formatServiceURL ( miner.url, path, query, mostCurrent ));
         }
         return urls;
-    }
-
-    //----------------------------------------------------------------//
-    @computed get
-    ignoredMiners () {
-
-        const ignored = [];
-        for ( let minerID in this.ignored ) {
-            if ( this.ignored [ minerID ]) {
-                ignored.push ( minerID );
-            }
-        }
-        return ignored;
     }
 
     //----------------------------------------------------------------//
@@ -300,33 +319,6 @@ export class ConsensusService {
     }
 
     //----------------------------------------------------------------//
-    @computed get
-    onlineMiners () {
-
-        const miners = [];
-
-        for ( let minerID in this.minersByID ) {
-            const miner = this.minersByID [ minerID ];
-            if ( miner.online && miner.digest && !this.isIgnored ( minerID )) {
-                miners.push ( miner );
-            }
-        }
-        return miners;
-    }
-
-    //----------------------------------------------------------------//
-    @computed get
-    onlineURLs () {
-
-        const onlineURLs = [];
-
-        for ( let miner of this.onlineMiners ) {
-            onlineURLs.push ( miner.url );
-        }
-        return onlineURLs;
-    }
-
-    //----------------------------------------------------------------//
     @action
     reset () {
 
@@ -340,23 +332,11 @@ export class ConsensusService {
         this.step               = 0;
         this.skip               = false;
         this.isCurrent          = false;
-        this.isBlocked          = false;
 
         this.minersByID         = {};
 
         this.pendingURLs        = [];
         this.scannedURLs        = {};
-    }
-
-    //----------------------------------------------------------------//
-    @action
-    rollback () {
-
-        // every single node has backslid; start over.
-        this.height         = 0;
-        this.digest         = this.genesis;
-        this.step           = 0;
-        this.isCurrent      = false;
     }
 
     //----------------------------------------------------------------//
@@ -440,69 +420,19 @@ export class ConsensusService {
 
         console.log ( '@CONENSUS_CONTROL: UPDATE CONSENSUS' );
 
-        // see if we need a rollback (*all* online miners have wrong 'current' digest)
-        let rollbackCount = 0;
-        for ( let miner of this.onlineMiners ) {
-            if ( miner.digest !== this.digest ) {
-                rollbackCount++;
-            }
-        }
+        // if not a single online miner matches our current digest, we're blocked
+        if ( this.isBlocked ) return;
 
-        this.blocked = ( rollbackCount === this.onlineMiners.length ) ;
-        if ( this.blocked ) return;
-
-        const minerCount = this.currentMiners.length;
-        if ( !minerCount ) return; // no online miners
+        const [ bestDigest, consensusRatio ] = ConsensusService.findConsensus ( this.currentMiners );
+        if ( !bestDigest ) return; // no online miners
 
         const nextHeight = this.height + this.step;
-
-        let bestCount = 0;
-        let bestDigest = false;
-
-        // build a histogram of digests at next height; also get the rollback count
-        const histogram = {}; // counts by digest
-        for ( let miner of this.currentMiners ) {
-            if ( !miner.nextDigest ) continue;
-
-            const count = ( histogram [ miner.nextDigest ] || 0 ) + 1;
-            histogram [ miner.nextDigest ] = count;
-
-            if ( bestCount < count ) {
-                bestCount   = count;
-                bestDigest  = miner.nextDigest;
-            }
-            
-            console.log ( `@CONENSUS_CONTROL: ${ miner.minerID } NEXT DIGEST: ${ miner.nextDigest }` );
-        }
-
-        const bestConsensus = bestCount / minerCount;
-        console.log ( `@CONENSUS_CONTROL: BEST CONSENSUS: ${ bestConsensus } AT: ${ nextHeight }` );
-
-        const accept = () => {
-
-            console.log ( `@CONENSUS_CONTROL: ACCEPT: ${ this.height } --> ${ nextHeight }` );
-
-            this.isCurrent = false;
-
-            const minersByID = _.cloneDeep ( this.minersByID );
-
-            for ( let minerID in minersByID ) {
-                const miner = minersByID [ minerID ];
-                if ( miner.nextDigest === bestDigest ) {
-                    miner.height    = nextHeight;
-                    miner.digest    = bestDigest;
-                }
-            }
-
-            this.minersByID     = minersByID;
-            this.height         = nextHeight;
-            this.digest         = bestDigest;
-        }
+        console.log ( `@CONENSUS_CONTROL: CONSENSUS RATIO: ${ consensusRatio } AT: ${ nextHeight }` );
 
         if ( this.skip ) {
 
             if ( this.skip === bestConsensus ) {
-                accept ();
+                this.acceptDigest ( bestDigest, nextHeight );
                 console.log ( `@CONENSUS_CONTROL: SKIPPED: ${ this.height } --> ${ nextHeight }` );
                 this.isCurrent = false;
             }
@@ -517,14 +447,14 @@ export class ConsensusService {
 
             this.skip = false;
 
-            if (( this.threshold === 1.0 && bestConsensus === 1.0 ) || ( this.threshold < bestConsensus )) {
+            if (( this.threshold === 1.0 && consensusRatio === 1.0 ) || ( this.threshold < consensusRatio )) {
 
-                accept ();
+                this.acceptDigest ( bestDigest, nextHeight );
                 this.step = this.step > 0 ? this.step * 2 : 1;
 
                 console.log ( '@CONENSUS_CONTROL: SPEED UP:', this.step );
             }
-            else if (( this.step === 1 ) && ( bestConsensus > 0.5 )) {
+            else if (( this.step === 1 ) && ( consensusRatio > 0.5 )) {
 
                 this.isCurrent = false;
 
@@ -532,7 +462,7 @@ export class ConsensusService {
                 this.checkCurrent   = false;
 
                 this.step = 10;
-                this.skip = bestConsensus;
+                this.skip = consensusRatio;
 
                 console.log ( '@CONENSUS_CONTROL: SKIP:', this.step );
             }
