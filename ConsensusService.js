@@ -47,7 +47,7 @@ export class ConsensusService {
     @action
     async acceptDigest ( digest, height ) {
 
-        console.log ( `@CONENSUS_CONTROL: ACCEPT: ${ this.height } --> ${ height }` );
+        console.log ( `@CONSENSUS_CONTROL: ACCEPT: ${ this.height } --> ${ height }` );
 
         this.isCurrent = false;
 
@@ -122,6 +122,17 @@ export class ConsensusService {
 
         debugLog ( 'DISCOVER MINERS ASYNC' );
 
+        while ( this.pendingURLs.length > 0 ) {
+            await this.discoverMinersSinglePassAsync ();
+        }
+    }
+
+    //----------------------------------------------------------------//
+    @action
+    async discoverMinersSinglePassAsync () {
+
+        debugLog ( 'DISCOVER MINERS ASYNC' );
+
         const checkMiner = async ( nodeURL, isPrimary ) => {
 
             debugLog ( 'CHECKING:', nodeURL );
@@ -137,7 +148,7 @@ export class ConsensusService {
 
                     debugLog ( 'FOUND A MINER:', nodeURL );
                     if ( result.genesis === this.genesis ) {
-                        this.affirmMiner ( result.minerID, nodeURL );
+                        this.affirmMiner ( result.minerID, nodeURL, result.genesis );
                         this.setMinerBuildInfo ( result.minerID, result.build, result.commit, result.acceptedRelease, result.nextRelease );
                     }
                 
@@ -156,31 +167,27 @@ export class ConsensusService {
             }
         }
 
-        while ( this.pendingURLs.length > 0 ) {
-
-            const promises = [];
-            runInAction (() => {
-                for ( let nodeURL of this.pendingURLs ) {
-                    this.scannedURLs [ nodeURL ] = true;
-                    promises.push ( checkMiner ( nodeURL, nodeURL = this.nodeURL ));
-                }
-                this.pendingURLs = [];
-            });
-            await this.revocable.all ( promises );
-        }
-    }
-
-    //----------------------------------------------------------------//
-    finalize () {
-
-        this.revocable.finalize ();
+        const promises = [];
+        runInAction (() => {
+            for ( let nodeURL of this.pendingURLs ) {
+                this.scannedURLs [ nodeURL ] = true;
+                promises.push ( checkMiner ( nodeURL, nodeURL = this.nodeURL ));
+            }
+            this.pendingURLs = [];
+        });
+        await this.revocable.all ( promises );
     }
 
     //----------------------------------------------------------------//
     static findConsensus ( miners ) {
 
+        console.log ( '@CONSENSUS_CONTROL: FIND CONSENSUS' );
+
         const minerCount = miners.length;
-        if ( !minerCount ) return [ false, 0 ]; // no online miners
+        if ( !minerCount ) {
+            console.log ( '@CONSENSUS_CONTROL: NO MINERS?' );
+            return [ false, 0 ]; // no online miners
+        }
 
         let bestCount = 0;
         let bestDigest = false;
@@ -197,17 +204,18 @@ export class ConsensusService {
                 bestCount   = count;
                 bestDigest  = miner.nextDigest;
             }
-            
-            console.log ( `@CONENSUS_CONTROL: ${ miner.minerID } NEXT DIGEST: ${ miner.nextDigest }` );
+            console.log ( `@CONSENSUS_CONTROL: ${ miner.minerID } NEXT DIGEST: ${ miner.nextDigest }` );
         }
 
-        const bestConsensus = bestCount / minerCount;
+        const consensusRatio = bestCount / minerCount;
 
-        return [ bestDigest, bestConsensus ];
+        console.log ( `@CONSENSUS_CONTROL: BEST DIGEST: ${ bestDigest } CONSENSUS RATIO: ${ consensusRatio }` );
+
+        return [ bestDigest, consensusRatio ];
     }
 
     //----------------------------------------------------------------//
-    static formatServiceURL ( base, path, query, mostCurrent ) {
+    formatServiceURL ( base, path, query, mostCurrent ) {
 
         const serviceURL        = url.parse ( base );
         serviceURL.pathname     = path;
@@ -224,7 +232,7 @@ export class ConsensusService {
 
         const currentURLs = this.currentURLs;
         const serviceURL = currentURLs.length ? currentURLs [ Math.floor ( Math.random () * currentURLs.length )] : false;
-        return serviceURL ? ConsensusService.formatServiceURL ( serviceURL, path, query, mostCurrent ) : false;
+        return serviceURL ? this.formatServiceURL ( serviceURL, path, query, mostCurrent ) : false;
     }
 
     //----------------------------------------------------------------//
@@ -233,7 +241,7 @@ export class ConsensusService {
         const urls = [];
 
         for ( let minerID of this.currentMiners ) {
-            urls.push ( ConsensusService.formatServiceURL ( miner.url, path, query, mostCurrent ));
+            urls.push ( this.formatServiceURL ( miner.url, path, query, mostCurrent ));
         }
         return urls;
     }
@@ -267,7 +275,8 @@ export class ConsensusService {
                     nodeURL:        nodeURL,
                 });
 
-                await this.discoverMinersAsync ();
+                await this.discoverMinersSinglePassAsync ();
+                await this.updateMinersAsync ();
 
                 if ( !this.onlineMiners.length ) return 'Problem getting miners.';
             }
@@ -354,6 +363,17 @@ export class ConsensusService {
     }
 
     //----------------------------------------------------------------//
+    async serviceStepAsync () {
+
+        await this.discoverMinersAsync ();
+        await this.updateMinersAsync ();
+
+        if ( this.onlineMiners.length ) {
+            await this.updateConsensus ();
+        }
+    }
+
+    //----------------------------------------------------------------//
     @action
     setMinerBuildInfo ( minerID, build, commit, acceptedRelease, nextRelease ) {
 
@@ -418,22 +438,21 @@ export class ConsensusService {
     @action
     updateConsensus () {
 
-        console.log ( '@CONENSUS_CONTROL: UPDATE CONSENSUS' );
+        console.log ( '@CONSENSUS_CONTROL: UPDATE CONSENSUS' );
 
         // if not a single online miner matches our current digest, we're blocked
         if ( this.isBlocked ) return;
 
         const [ bestDigest, consensusRatio ] = ConsensusService.findConsensus ( this.currentMiners );
-        if ( !bestDigest ) return; // no online miners
 
         const nextHeight = this.height + this.step;
-        console.log ( `@CONENSUS_CONTROL: CONSENSUS RATIO: ${ consensusRatio } AT: ${ nextHeight }` );
+        console.log ( `@CONSENSUS_CONTROL: CONSENSUS RATIO: ${ consensusRatio } AT: ${ nextHeight }` );
 
         if ( this.skip ) {
 
-            if ( this.skip === bestConsensus ) {
+            if ( this.skip === consensusRatio ) {
                 this.acceptDigest ( bestDigest, nextHeight );
-                console.log ( `@CONENSUS_CONTROL: SKIPPED: ${ this.height } --> ${ nextHeight }` );
+                console.log ( `@CONSENSUS_CONTROL: SKIPPED: ${ this.height } --> ${ nextHeight }` );
                 this.isCurrent = false;
             }
             else {
@@ -452,11 +471,9 @@ export class ConsensusService {
                 this.acceptDigest ( bestDigest, nextHeight );
                 this.step = this.step > 0 ? this.step * 2 : 1;
 
-                console.log ( '@CONENSUS_CONTROL: SPEED UP:', this.step );
+                console.log ( '@CONSENSUS_CONTROL: SPEED UP:', this.step );
             }
             else if (( this.step === 1 ) && ( consensusRatio > 0.5 )) {
-
-                this.isCurrent = false;
 
                 this.isCurrent      = false;
                 this.checkCurrent   = false;
@@ -464,7 +481,7 @@ export class ConsensusService {
                 this.step = 10;
                 this.skip = consensusRatio;
 
-                console.log ( '@CONENSUS_CONTROL: SKIP:', this.step );
+                console.log ( '@CONSENSUS_CONTROL: SKIP:', this.step );
             }
             else {
 
@@ -472,7 +489,7 @@ export class ConsensusService {
 
                 this.step = this.step > 1 ? this.step / 2 : 1;
 
-                console.log ( '@CONENSUS_CONTROL: SLOW DOWN:', this.step );
+                console.log ( '@CONSENSUS_CONTROL: SLOW DOWN:', this.step );
             }
         }   
     }
