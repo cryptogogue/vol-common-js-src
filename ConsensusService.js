@@ -428,7 +428,8 @@ export class ConsensusService {
 
         if ( nextHeight > this.nextHeight ) {
             for ( let miner of cluster ) {
-                miner.nextHeight = nextHeight;
+                miner.nextHeight    = nextHeight;
+                miner.nextDigest    = false;
             }
             this.nextHeight = nextHeight;
         }
@@ -479,14 +480,15 @@ export class ConsensusService {
             const result = await this.revocable.fetchJSON ( peekURL );
             
             // these could change while waiting for the previous batch of results. ignore them if they did.
-            if (( miner.height === height ) && ( miner.nextHeight === nextHeight )) {
-
-                const prev = result.prev;
-                const peek = result.peek;
-
+            if ( miner.height === height ) {
                 runInAction (() => {
-                    miner.digest            = prev ? prev.digest : false;
-                    miner.nextDigest        = peek ? peek.digest : false;
+                    miner.digest = result.prev ? result.prev.digest : false;
+                });
+            }
+
+            if ( miner.nextHeight === nextHeight ) {
+                runInAction (() => {
+                    miner.nextDigest = result.peek ? result.peek.digest : false;
                 });
             }
 
