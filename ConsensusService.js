@@ -21,50 +21,27 @@ export class ConsensusService {
 
     @observable genesis;
     @observable identity;
-    @observable height;
-
     @observable digest;
-    @observable step;
-    @observable isCurrent;
+    @observable height;
+    @observable nextHeight;
 
-    @observable minersByID;
+    @observable minersByID          = {};
 
-    @observable pendingURLs     = [];
-    @observable scannedURLs     = {};
+    @observable pendingURLs         = [];
+    @observable scannedURLs         = {};
 
-    @observable ignored         = {};
-    @observable timeout         = DEFAULT_TIMEOUT;
-    @observable threshold       = DEFAULT_THRESHOLD;
+    @observable ignored             = {};
+    @observable threshold           = DEFAULT_THRESHOLD;
 
-    @computed get               currentMiners           () { return this.onlineMiners.filter (( miner ) => { return miner.digest === this.digest; }); }
-    @computed get               currentURLs             () { return this.currentMiners.map (( miner ) => { return miner.url; }); }
-    @computed get               ignoredMiners           () { return Object.keys ( this.minersByID ).filter (( minerID ) => { return this.ignored [ minerID ]; }); }
-    @computed get               isBlocked               () { return (( this.onlineMiners.length > 0 ) && ( this.currentMiners.length === 0 )); }
-    @computed get               onlineMiners            () { return Object.values ( this.minersByID ).filter (( miner ) => { return ( miner.online && miner.digest && !this.isIgnored ( miner.minerID )); }); }
-    @computed get               onlineURLs              () { return this.onlineMiners.map (( miner ) => { return miner.url; }); }
+    @observable serviceCountdown    = 1.0;
 
-    //----------------------------------------------------------------//
-    @action
-    async acceptDigest ( digest, height ) {
-
-        console.log ( `@CONSENSUS_CONTROL: ACCEPT: ${ this.height } --> ${ height }` );
-
-        this.isCurrent = false;
-
-        const minersByID = _.cloneDeep ( this.minersByID );
-
-        for ( let minerID in minersByID ) {
-            const miner = minersByID [ minerID ];
-            if ( miner.nextDigest === digest ) {
-                miner.height    = height;
-                miner.digest    = digest;
-            }
-        }
-
-        this.minersByID     = minersByID;
-        this.height         = height;
-        this.digest         = digest;
-    }
+    @computed get           currentMiners           () { return this.onlineMiners.filter (( miner ) => { return miner.digest === this.digest; }); }
+    @computed get           currentURLs             () { return this.currentMiners.map (( miner ) => { return miner.url; }); }
+    @computed get           ignoredIDs              () { return Object.keys ( this.minersByID ).filter (( minerID ) => { return this.ignored [ minerID ]; }); }
+    @computed get           isBlocked               () { return (( this.onlineMiners.length > 0 ) && ( this.currentMiners.length === 0 )); }
+    @computed get           miners                  () { return Object.values ( this.minersByID ); }
+    @computed get           onlineMiners            () { return this.miners.filter (( miner ) => { return ( miner.online && !this.isIgnored ( miner.minerID )); }); }
+    @computed get           onlineURLs              () { return this.onlineMiners.map (( miner ) => { return miner.url; }); }
 
     //----------------------------------------------------------------//
     @action
@@ -77,16 +54,21 @@ export class ConsensusService {
             return;
         }
 
-        debugLog ( 'AFFIRMING MINER', minerID, nodeURL );
-
         miner.minerID           = minerID;
-        miner.height            = 0;
-        miner.digest            = false;        // digest at current consensus height (prev)
-        miner.nextDigest        = false;        // digest at next consensus height (peek)
+        miner.height            = this.height;
+        miner.nextHeight        = this.nextHeight;
+        miner.total             = 0;            // total blocks
         miner.url               = nodeURL;
-        miner.isBusy            = false;
         miner.online            = true;         // assume miner is online until proven otherwise
         miner.latency           = 0;
+
+        miner.digest            = this.digest;
+        miner.nextDigest        = false;
+
+        miner.build             = 0;
+        miner.commit            = 0;
+        miner.acceptedRelease   = 0;
+        miner.nextRelease       = 0;
 
         this.minersByID [ minerID ] = miner;
     }
@@ -120,8 +102,6 @@ export class ConsensusService {
     @action
     async discoverMinersAsync () {
 
-        debugLog ( 'DISCOVER MINERS ASYNC' );
-
         while ( this.pendingURLs.length > 0 ) {
             await this.discoverMinersSinglePassAsync ();
         }
@@ -131,11 +111,7 @@ export class ConsensusService {
     @action
     async discoverMinersSinglePassAsync () {
 
-        debugLog ( 'DISCOVER MINERS ASYNC' );
-
-        const checkMiner = async ( nodeURL, isPrimary ) => {
-
-            debugLog ( 'CHECKING:', nodeURL );
+        const checkMiner = async ( nodeURL ) => {
 
             try {
 
@@ -145,20 +121,9 @@ export class ConsensusService {
                 let result = await this.revocable.fetchJSON ( url.format ( confirmURL ));
 
                 if ( result.minerID ) {
-
-                    debugLog ( 'FOUND A MINER:', nodeURL );
                     if ( result.genesis === this.genesis ) {
                         this.affirmMiner ( result.minerID, nodeURL, result.genesis );
-                        this.setMinerBuildInfo ( result.minerID, result.build, result.commit, result.acceptedRelease, result.nextRelease );
-                    }
-                
-                    confirmURL.pathname = `/miners`;
-                    result = await this.revocable.fetchJSON ( url.format ( confirmURL ));
-
-                    if ( result.miners ) {
-                        for ( let minerURL of result.miners ) {
-                            this.affirmNodeURLs ( minerURL );
-                        }
+                        await this.updateMinerAsync ( result.minerID );
                     }
                 }
             }
@@ -171,7 +136,7 @@ export class ConsensusService {
         runInAction (() => {
             for ( let nodeURL of this.pendingURLs ) {
                 this.scannedURLs [ nodeURL ] = true;
-                promises.push ( checkMiner ( nodeURL, nodeURL = this.nodeURL ));
+                promises.push ( checkMiner ( nodeURL ));
             }
             this.pendingURLs = [];
         });
@@ -179,22 +144,20 @@ export class ConsensusService {
     }
 
     //----------------------------------------------------------------//
-    static findConsensus ( miners ) {
+    findConsensus () {
 
-        console.log ( '@CONSENSUS_CONTROL: FIND CONSENSUS' );
+        if ( this.height === this.nextHeight ) return;
 
-        const minerCount = miners.length;
-        if ( !minerCount ) {
-            console.log ( '@CONSENSUS_CONTROL: NO MINERS?' );
-            return [ false, 0 ]; // no online miners
-        }
+        const miners = this.miners.filter (( miner ) => { return miner.nextHeight === this.nextHeight; });
+        if ( !miners.length ) return;
 
         let bestCount = 0;
         let bestDigest = false;
 
-        // build a histogram of digests at next height; also get the rollback count
+        // build a histogram of digests at next height
         const histogram = {}; // counts by digest
         for ( let miner of miners ) {
+
             if ( !miner.nextDigest ) continue;
 
             const count = ( histogram [ miner.nextDigest ] || 0 ) + 1;
@@ -204,14 +167,21 @@ export class ConsensusService {
                 bestCount   = count;
                 bestDigest  = miner.nextDigest;
             }
-            console.log ( `@CONSENSUS_CONTROL: ${ miner.minerID } NEXT DIGEST: ${ miner.nextDigest }` );
         }
 
-        const consensusRatio = bestCount / minerCount;
+        const consensusRatio = bestCount / miners.length;
 
-        console.log ( `@CONSENSUS_CONTROL: BEST DIGEST: ${ bestDigest } CONSENSUS RATIO: ${ consensusRatio }` );
+        if ( consensusRatio < this.threshold ) return false;
 
-        return [ bestDigest, consensusRatio ];
+        for ( let miner of miners ) {
+            if ( miner.nextDigest === bestDigest ) {
+                miner.height    = this.nextHeight;
+                miner.digest    = bestDigest;
+            }
+        }
+
+        this.height = this.nextHeight;
+        this.digest = bestDigest;
     }
 
     //----------------------------------------------------------------//
@@ -270,14 +240,11 @@ export class ConsensusService {
                     genesis:        info.genesis,
                     height:         0,
                     digest:         info.genesis,
-                    timeout:        DEFAULT_TIMEOUT,
                     minerURLs:      [],
                     nodeURL:        nodeURL,
                 });
 
                 await this.discoverMinersSinglePassAsync ();
-                await this.updateMinersAsync ();
-
                 if ( !this.onlineMiners.length ) return 'Problem getting miners.';
             }
             else {
@@ -310,17 +277,15 @@ export class ConsensusService {
     @action
     load ( store ) {
 
-        this.identity   = store.identity;
-        this.genesis    = store.genesis;
-        this.height     = store.height;
-        this.digest     = store.digest;
-        this.timeout    = !isNaN ( store.longTimehout ) ? store.longTimehout : DEFAULT_TIMEOUT;
-        this.threshold  = !isNaN ( store.threshold ) ? store.threshold : DEFAULT_THRESHOLD;
+        this.identity       = store.identity;
+        this.genesis        = store.genesis;
+        this.height         = store.height;
+        this.nextHeight     = store.nextHeight || store.height;
+        this.digest         = store.digest;
+        this.threshold      = !isNaN ( store.threshold ) ? store.threshold : DEFAULT_THRESHOLD;
 
-        if ( store.ignored ) {
-            for ( let minerID of store.ignored ) {
-                this.toggleIgnored ( minerID );
-            }
+        for ( let minerID of ( store.ignoredIDs || [] )) {
+            this.toggleIgnored ( minerID );
         }
 
         const nodeURLs = store.minerURLs.concat ( store.nodeURL );
@@ -336,10 +301,9 @@ export class ConsensusService {
         this.genesis            = false;
         this.identity           = '';
         this.height             = 0;
+        this.nextHeight         = 0;
 
         this.digest             = false;
-        this.step               = 0;
-        this.skip               = false;
         this.isCurrent          = false;
 
         this.minersByID         = {};
@@ -352,13 +316,11 @@ export class ConsensusService {
     @action
     save ( store ) {
 
-        delete ( store.timeout );
-
         store.height            = this.height;
+        store.nextHeight        = this.nextHeight;
         store.digest            = this.digest;
         store.minerURLs         = this.onlineURLs;
-        store.ignored           = this.ignoredMiners;
-        store.longTimehout      = this.timeout;
+        store.ignoredIDs        = this.ignoredIDs;
         store.threshold         = this.threshold;
     }
 
@@ -366,23 +328,7 @@ export class ConsensusService {
     async serviceStepAsync () {
 
         await this.discoverMinersAsync ();
-        await this.updateMinersAsync ();
-
-        if ( this.onlineMiners.length ) {
-            await this.updateConsensus ();
-        }
-    }
-
-    //----------------------------------------------------------------//
-    @action
-    setMinerBuildInfo ( minerID, build, commit, acceptedRelease, nextRelease ) {
-
-        const miner             = this.minersByID [ minerID ];
-
-        miner.build             = build;
-        miner.commit            = commit;
-        miner.acceptedRelease   = acceptedRelease || 0;
-        miner.nextRelease       = nextRelease || 0;
+        this.updateConsensus ();
     }
 
     //----------------------------------------------------------------//
@@ -390,27 +336,7 @@ export class ConsensusService {
     setMinerOffline ( minerID ) {
 
         const miner             = this.minersByID [ minerID ];
-
-        debugLog ( 'UPDATE MINER OFFLINE', minerID, );
-
-        miner.isBusy            = false;
         miner.online            = false;
-    }
-
-    //----------------------------------------------------------------//
-    @action
-    setMinerStatus ( minerID, url, total, prev, peek, latency ) {
-
-        const miner             = this.minersByID [ minerID ];
-
-        miner.minerID           = minerID;
-        miner.digest            = prev ? prev.digest : false;
-        miner.nextDigest        = peek ? peek.digest : false;
-        miner.url               = url;
-        miner.total             = total;
-        miner.isBusy            = false;
-        miner.online            = true;
-        miner.latency           = ( miner.latency * (( LATENCY_SAMPLE_SIZE - 1 ) / LATENCY_SAMPLE_SIZE )) + ( latency / LATENCY_SAMPLE_SIZE );
     }
 
     //----------------------------------------------------------------//
@@ -422,15 +348,53 @@ export class ConsensusService {
 
     //----------------------------------------------------------------//
     @action
-    setTimeout ( timeout ) {
+    setServiceCountdown ( countdown ) {
 
-        this.timeout = timeout;
+        this.serviceCountdown = countdown;
+    }
+
+    //----------------------------------------------------------------//
+    async startServiceLoopAsync ( onStep ) {
+
+        this.serviceLoopAsync ( onStep );
+    }
+
+    //----------------------------------------------------------------//
+    async serviceLoopAsync ( onStep ) {
+
+        if ( this.serviceCountdownTimeout ) {
+            this.revocable.revoke ( this.serviceCountdownTimeout );
+            this.serviceCountdownTimeout = false;
+        }
+
+        this.setServiceCountdown ( 0 );
+
+        let count = this.serviceLoopCount || 0;
+        debugLog ( 'SERVICE LOOP RUN:', count );
+        this.serviceLoopCount = count + 1;
+
+        await this.serviceStepAsync ();
+        onStep && onStep ();
+
+        const timeout = 5000;
+
+        this.setServiceCountdown ( 1 );
+        const delay = Math.floor ( timeout / 100 );
+        let i = 0;
+        const countdown = () => {
+            if ( i++ < 100 ) {
+                this.setServiceCountdown ( 1.0 - ( i / 100 ));
+                this.serviceCountdownTimeout = this.revocable.timeout (() => { countdown ()}, delay );
+            }
+        }
+        countdown ();
+
+        this.revocable.timeout (() => { this.serviceLoopAsync ()}, timeout );
     }
 
     //----------------------------------------------------------------//
     @action
     toggleIgnored ( minerID ) {
-
         this.ignored [ minerID ] = !this.isIgnored ( minerID );
     }
 
@@ -438,130 +402,107 @@ export class ConsensusService {
     @action
     updateConsensus () {
 
-        console.log ( '@CONSENSUS_CONTROL: UPDATE CONSENSUS' );
+        this.findConsensus ();
 
-        // if not a single online miner matches our current digest, we're blocked
-        if ( this.isBlocked ) return;
+        const half = Math.floor ( this.onlineMiners.length / 2 );
 
-        const [ bestDigest, consensusRatio ] = ConsensusService.findConsensus ( this.currentMiners );
-
-        const nextHeight = this.height + this.step;
-        console.log ( `@CONSENSUS_CONTROL: CONSENSUS RATIO: ${ consensusRatio } AT: ${ nextHeight }` );
-
-        if ( this.skip ) {
-
-            if ( this.skip === consensusRatio ) {
-                this.acceptDigest ( bestDigest, nextHeight );
-                console.log ( `@CONSENSUS_CONTROL: SKIPPED: ${ this.height } --> ${ nextHeight }` );
-                this.isCurrent = false;
+        const cluster = [];
+        for ( let miner of this.onlineMiners ) {
+        
+            // count all miners *more* than 10 blocks higher than this miner
+            let count = 0;
+            for ( let other of this.onlineMiners ) {
+                count += ( other.minerID !== miner.minerID ) && (( other.total - miner.total ) > 10 ) ? 1 : 0;
             }
-            else {
-                this.isCurrent = true;
-            }
-
-            this.step = 1;
-            this.skip = false;
+            if ( half < count ) continue;
+            cluster.push ( miner );
         }
-        else {
 
-            this.skip = false;
+        if ( cluster.length === 0 ) return;
 
-            if (( this.threshold === 1.0 && consensusRatio === 1.0 ) || ( this.threshold < consensusRatio )) {
+        let nextHeight = cluster [ 0 ].total;
+        for ( let miner of cluster ) {
+            nextHeight = ( miner.total < nextHeight ) ? miner.total : nextHeight;
+        }
+        nextHeight = nextHeight - 1;
 
-                this.acceptDigest ( bestDigest, nextHeight );
-                this.step = this.step > 0 ? this.step * 2 : 1;
-
-                console.log ( '@CONSENSUS_CONTROL: SPEED UP:', this.step );
+        if ( nextHeight > this.nextHeight ) {
+            for ( let miner of cluster ) {
+                miner.nextHeight = nextHeight;
             }
-            else if (( this.step === 1 ) && ( consensusRatio > 0.5 )) {
-
-                this.isCurrent      = false;
-                this.checkCurrent   = false;
-
-                this.step = 10;
-                this.skip = consensusRatio;
-
-                console.log ( '@CONSENSUS_CONTROL: SKIP:', this.step );
-            }
-            else {
-
-                this.isCurrent = ( this.step === 1 );
-
-                this.step = this.step > 1 ? this.step / 2 : 1;
-
-                console.log ( '@CONSENSUS_CONTROL: SLOW DOWN:', this.step );
-            }
-        }   
+            this.nextHeight = nextHeight;
+        }
     }
 
     //----------------------------------------------------------------//
     @action
-    async updateMinersAsync () {
+    async updateMinerAsync ( minerID ) {
 
-        debugLog ( 'SYNC: MINERS: SCAN MINERS' );
+        const miner = this.minersByID [ minerID ];
 
-        const nextHeight = this.height + this.step;
+        try {
 
-        if ( _.size ( this.minersByID ) === 0 ) {
-            debugLog ( 'SYNC: No miners found.' );
-            return 5000;
-        }
+            let latency = ( new Date ()).getTime ();
 
-        const peek = async ( miner ) => {
+            let minerURL = url.parse ( miner.url );
+            minerURL.pathname = `/`;
+            minerURL = url.format ( minerURL );
+
+            // TODO: get this from peek info, so we only have to do one call
+            const nodeInfo = await this.revocable.fetchJSON ( minerURL );
+            if ( !( nodeInfo && nodeInfo.minerID ) || ( nodeInfo.genesis !== this.genesis )) {
+                this.setMinerOffline ( miner.minerID );
+                return;
+            }
 
             runInAction (() => {
-                miner.isBusy = true;
-            })
+                miner.url               = minerURL;
+                miner.total             = nodeInfo.totalBlocks;
+                miner.online            = true;
+                miner.build             = nodeInfo.build;
+                miner.commit            = nodeInfo.commit;
+                miner.acceptedRelease   = nodeInfo.acceptedRelease || 0;
+                miner.nextRelease       = nodeInfo.nextRelease || 0;
 
-            try {
+                miner.height            = miner.height < miner.total ? miner.height : miner.total - 1;
+                miner.nextHeight        = miner.nextHeight < miner.total ? miner.nextHeight : miner.total - 1;
+            });
 
-                debugLog ( 'TIMEOUT:', this.timeout );
+            const height            = miner.height;
+            const nextHeight        = miner.nextHeight;
 
-                // TODO: get this from peek info, so we only have to do one call
-                const nodeInfo = await this.revocable.fetchJSON ( url.format ( miner.url ), undefined, this.timeout );
-                if ( !( nodeInfo && nodeInfo.minerID ) || ( nodeInfo.genesis !== this.genesis )) {
-                    debugLog ( 'NOT A MINER OR MINER IS OFFLINE:', nodeInfo );
-                    this.setMinerOffline ( miner.minerID );
-                    return;
-                }
+            let peekURL             = url.parse ( miner.url );
+            peekURL.pathname        = `/consensus/peek`;
+            peekURL.query           = { prev: height, peek: nextHeight, sampleMiners : 16 };
+            peekURL                 = url.format ( peekURL );
+            
+            const result = await this.revocable.fetchJSON ( peekURL );
+            
+            // these could change while waiting for the previous batch of results. ignore them if they did.
+            if (( miner.height === height ) && ( miner.nextHeight === nextHeight )) {
 
-                this.setMinerBuildInfo ( miner.minerID, nodeInfo.build, nodeInfo.commit, nodeInfo.acceptedRelease, nodeInfo.nextRelease );
+                const prev = result.prev;
+                const peek = result.peek;
 
-                // "peek" at the headers of the current and next block; also get a random sample of up to 16 miners.
-                let peekURL         = url.parse ( miner.url );
-                peekURL.pathname    = `/consensus/peek`;
-                peekURL.query       = { peek: nextHeight, prev: this.height, sampleMiners : 16 };
-                peekURL             = url.format ( peekURL );
-
-                debugLog ( 'SYNC: PEEK:', peekURL );
-
-                let latency = ( new Date ()).getTime ();
-                const result = await this.revocable.fetchJSON ( peekURL, undefined, this.timeout );
-                latency = ( new Date ()).getTime () - latency;
-
-                debugLog ( 'SYNC: PEEK RESULT:', result );
-
-                result.miners.push ( miner.url );
-                this.affirmNodeURLs ( result.miners );
-                this.setMinerStatus ( result.minerID, miner.url, result.totalBlocks, result.prev, result.peek, latency );
+                runInAction (() => {
+                    miner.digest            = prev ? prev.digest : false;
+                    miner.nextDigest        = peek ? peek.digest : false;
+                });
             }
-            catch ( error ) {
-                debugLog ( 'SYNC: MINERS:', error );
-                this.setMinerOffline ( miner.minerID );
-            }
+
+            result.miners.push ( miner.url );
+            this.affirmNodeURLs ( result.miners );
+
+            latency = ( new Date ()).getTime () - latency;
+            runInAction (() => {
+                miner.latency = latency;
+            });
+        }
+        catch ( error ) {
+            debugLog ( error );
+            this.setMinerOffline ( miner.minerID );
         }
 
-        const promises = [];
-        for ( let minerID in this.minersByID ) {
-            const miner = this.minersByID [ minerID ];
-            if ( miner.isBusy ) continue;
-            if ( this.isIgnored ( minerID )) continue;
-
-            promises.push ( peek ( miner ));
-        }
-
-        await this.revocable.all ( promises );
-
-        debugLog ( 'SYNC: UPDATED MINERS:', JSON.stringify ( this.minersByID, null, 4 ));
-    }   
+        this.revocable.timeout (() => { this.updateMinerAsync ( minerID )}, 5000 );
+    }
 }
