@@ -45,7 +45,7 @@ export class ConsensusService {
 
     //----------------------------------------------------------------//
     @action
-    async affirmMiner ( minerID, nodeURL ) {
+    async affirmMinerAsync ( minerID, nodeURL ) {
 
         const miner = this.minersByID [ minerID ] || {};
 
@@ -71,6 +71,8 @@ export class ConsensusService {
         miner.nextRelease       = 0;
 
         this.minersByID [ minerID ] = miner;
+
+        await this.updateMinerAsync ( minerID );
     }
 
     //----------------------------------------------------------------//
@@ -122,8 +124,7 @@ export class ConsensusService {
 
                 if ( result.minerID ) {
                     if ( result.genesis === this.genesis ) {
-                        this.affirmMiner ( result.minerID, nodeURL, result.genesis );
-                        await this.updateMinerAsync ( result.minerID );
+                        await this.affirmMinerAsync ( result.minerID, nodeURL, result.genesis );
                     }
                 }
             }
@@ -438,6 +439,8 @@ export class ConsensusService {
     //----------------------------------------------------------------//
     @action
     async updateMinerAsync ( minerID ) {
+
+        debugLog ( 'UPDATE MINER', minerID );
 
         const miner = this.minersByID [ minerID ];
 
