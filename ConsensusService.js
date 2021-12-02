@@ -317,6 +317,8 @@ export class ConsensusService {
     @action
     save ( store ) {
 
+        debugLog ( 'SAVING CONSENSUS AT HEIGHT:', this.height );
+
         store.height            = this.height;
         store.nextHeight        = this.nextHeight;
         store.digest            = this.digest;
@@ -390,7 +392,7 @@ export class ConsensusService {
         }
         countdown ();
 
-        this.revocable.timeout (() => { this.serviceLoopAsync ()}, timeout );
+        this.revocable.timeout (() => { this.serviceLoopAsync ( onStep )}, timeout );
     }
 
     //----------------------------------------------------------------//
