@@ -34,10 +34,11 @@ export class ConsensusService {
     @observable threshold           = DEFAULT_THRESHOLD;
 
     @observable serviceCountdown    = 1.0;
+    @observable isOnline            = false;
 
     @computed get           currentMiners           () { return this.onlineMiners.filter (( miner ) => { return miner.digest === this.digest; }); }
     @computed get           currentURLs             () { return this.currentMiners.map (( miner ) => { return miner.url; }); }
-    @computed get           ignoredIDs              () { return Object.keys ( this.minersByID ).filter (( minerID ) => { return this.ignored [ minerID ]; }); }
+    @computed get           ignoredIDs              () { return Object.keys ( this.ignored ).filter (( minerID ) => { return this.ignored [ minerID ]; }); }
     @computed get           isBlocked               () { return (( this.onlineMiners.length > 0 ) && ( this.currentMiners.length === 0 )); }
     @computed get           miners                  () { return Object.values ( this.minersByID ); }
     @computed get           onlineMiners            () { return this.miners.filter (( miner ) => { return ( miner.online && !this.isIgnored ( miner.minerID )); }); }
@@ -46,6 +47,8 @@ export class ConsensusService {
     //----------------------------------------------------------------//
     @action
     async affirmMinerAsync ( minerID, nodeURL ) {
+
+        this.scannedURLs [ nodeURL ] = true;
 
         const miner = this.minersByID [ minerID ] || {};
 
@@ -87,6 +90,8 @@ export class ConsensusService {
             nodeURL.pathname    = `/`;
             nodeURL             = url.format ( nodeURL );
 
+            if ( this.pendingURLs.includes ( nodeURL )) continue;
+
             if ( !this.scannedURLs [ nodeURL ]) {
                 this.pendingURLs.push ( nodeURL );
             }
@@ -104,14 +109,21 @@ export class ConsensusService {
     @action
     async discoverMinersAsync () {
 
+        const passURLs = {};
+
         while ( this.pendingURLs.length > 0 ) {
-            await this.discoverMinersSinglePassAsync ();
+            await this.discoverMinersSinglePassAsync ( passURLs );
         }
+        runInAction (() => {
+            this.isOnline = true;
+        });
     }
 
     //----------------------------------------------------------------//
     @action
-    async discoverMinersSinglePassAsync () {
+    async discoverMinersSinglePassAsync ( passURLs, timeout ) {
+
+        debugLog ( 'DISCOVER:', JSON.stringify ( this.pendingURLs ));
 
         const checkMiner = async ( nodeURL ) => {
 
@@ -120,7 +132,7 @@ export class ConsensusService {
                 const confirmURL            = url.parse ( nodeURL );
                 confirmURL.pathname         = `/`;
 
-                let result = await this.revocable.fetchJSON ( url.format ( confirmURL ));
+                let result = await this.revocable.fetchJSON ( url.format ( confirmURL ), undefined, 5000 );
 
                 if ( result.minerID ) {
                     if ( result.genesis === this.genesis ) {
@@ -131,17 +143,22 @@ export class ConsensusService {
             catch ( error ) {
                 debugLog ( error );
             }
+            debugLog ( 'DONE:', nodeURL );
         }
 
+        passURLs = passURLs || {};
         const promises = [];
         runInAction (() => {
             for ( let nodeURL of this.pendingURLs ) {
-                this.scannedURLs [ nodeURL ] = true;
+                if ( this.scannedURLs [ nodeURL ] || passURLs [ nodeURL ]) continue;
+                passURLs [ nodeURL ] = true;
                 promises.push ( checkMiner ( nodeURL ));
             }
             this.pendingURLs = [];
         });
         await this.revocable.all ( promises );
+
+        debugLog ( 'MORE:', JSON.stringify ( this.pendingURLs ));
     }
 
     //----------------------------------------------------------------//
@@ -267,14 +284,6 @@ export class ConsensusService {
     }
 
     //----------------------------------------------------------------//
-    @computed get
-    isOnline () {
-
-        const totalMiners = _.size ( this.minersByID );
-        return totalMiners ? ( this.onlineMiners.length > Math.floor ( totalMiners / 2 )) : false;
-    }
-
-    //----------------------------------------------------------------//
     @action
     load ( store ) {
 
@@ -286,7 +295,7 @@ export class ConsensusService {
         this.threshold      = !isNaN ( store.threshold ) ? store.threshold : DEFAULT_THRESHOLD;
 
         for ( let minerID of ( store.ignoredIDs || [] )) {
-            this.toggleIgnored ( minerID );
+            this.ignored [ minerID ] = true;
         }
 
         const nodeURLs = store.minerURLs.concat ( store.nodeURL );
