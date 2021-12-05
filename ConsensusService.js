@@ -34,7 +34,6 @@ export class ConsensusService {
     @observable threshold           = DEFAULT_THRESHOLD;
 
     @observable serviceCountdown    = 1.0;
-    @observable isOnline            = false;
 
     @computed get           currentMiners           () { return this.onlineMiners.filter (( miner ) => { return miner.digest === this.digest; }); }
     @computed get           currentURLs             () { return this.currentMiners.map (( miner ) => { return miner.url; }); }
@@ -62,7 +61,7 @@ export class ConsensusService {
         miner.nextHeight        = this.nextHeight;
         miner.total             = 0;            // total blocks
         miner.url               = nodeURL;
-        miner.online            = true;         // assume miner is online until proven otherwise
+        miner.online            = false;        // assume miner is offline until proven otherwise
         miner.latency           = 0;
 
         miner.digest            = this.digest;
@@ -99,7 +98,7 @@ export class ConsensusService {
     }
 
     //----------------------------------------------------------------//
-    constructor ( ignored ) {
+    constructor () {
 
         this.revocable = new RevocableContext ();
         this.reset ();
@@ -114,9 +113,6 @@ export class ConsensusService {
         while ( this.pendingURLs.length > 0 ) {
             await this.discoverMinersSinglePassAsync ( passURLs );
         }
-        runInAction (() => {
-            this.isOnline = true;
-        });
     }
 
     //----------------------------------------------------------------//
@@ -281,6 +277,14 @@ export class ConsensusService {
     isIgnored ( minerID ) {
         
         return Boolean ( this.ignored [ minerID ]);
+    }
+
+    //----------------------------------------------------------------//
+    @computed get
+    isOnline () {
+
+        const totalMiners = _.size ( this.minersByID );
+        return totalMiners ? ( this.onlineMiners.length > Math.floor ( totalMiners / 2 )) : false;
     }
 
     //----------------------------------------------------------------//
@@ -473,7 +477,6 @@ export class ConsensusService {
             runInAction (() => {
                 miner.url               = minerURL;
                 miner.total             = nodeInfo.totalBlocks;
-                miner.online            = true;
                 miner.build             = nodeInfo.build;
                 miner.commit            = nodeInfo.commit;
                 miner.acceptedRelease   = nodeInfo.acceptedRelease || 0;
@@ -511,7 +514,8 @@ export class ConsensusService {
 
             latency = ( new Date ()).getTime () - latency;
             runInAction (() => {
-                miner.latency = latency;
+                miner.latency           = latency;
+                miner.online            = true;
             });
         }
         catch ( error ) {
