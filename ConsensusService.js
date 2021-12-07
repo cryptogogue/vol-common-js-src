@@ -35,6 +35,7 @@ export class ConsensusService {
 
     @observable serviceCountdown    = 1.0;
 
+    @computed get           currentMinerIDs         () { return this.currentMiners.map (( miner ) => { return miner.minerID }); }
     @computed get           currentMiners           () { return this.onlineMiners.filter (( miner ) => { return miner.digest === this.digest; }); }
     @computed get           currentURLs             () { return this.currentMiners.map (( miner ) => { return miner.url; }); }
     @computed get           ignoredIDs              () { return Object.keys ( this.ignored ).filter (( minerID ) => { return this.ignored [ minerID ]; }); }
@@ -237,6 +238,7 @@ export class ConsensusService {
 
         try {
 
+            nodeURL = url.parse ( nodeURL ).format ( nodeURL );
             const info = await this.revocable.fetchJSON ( nodeURL );
 
             if ( info && ( info.type === 'VOL_MINING_NODE' )) {
@@ -341,6 +343,38 @@ export class ConsensusService {
     }
 
     //----------------------------------------------------------------//
+    async serviceLoopAsync ( onStep ) {
+
+        if ( this.serviceCountdownTimeout ) {
+            this.revocable.revoke ( this.serviceCountdownTimeout );
+            this.serviceCountdownTimeout = false;
+        }
+
+        this.setServiceCountdown ( 0 );
+
+        let count = this.serviceLoopCount || 0;
+        this.serviceLoopCount = count + 1;
+
+        await this.serviceStepAsync ();
+        onStep && onStep ();
+
+        const timeout = 5000;
+
+        this.setServiceCountdown ( 1 );
+        const delay = Math.floor ( timeout / 100 );
+        let i = 0;
+        const countdown = () => {
+            if ( i++ < 100 ) {
+                this.setServiceCountdown ( 1.0 - ( i / 100 ));
+                this.serviceCountdownTimeout = this.revocable.timeout (() => { countdown ()}, delay );
+            }
+        }
+        countdown ();
+
+        this.revocable.timeout (() => { this.serviceLoopAsync ( onStep )}, timeout );
+    }
+
+    //----------------------------------------------------------------//
     async serviceStepAsync () {
 
         await this.discoverMinersAsync ();
@@ -372,40 +406,7 @@ export class ConsensusService {
     //----------------------------------------------------------------//
     async startServiceLoopAsync ( onStep ) {
 
-        this.serviceLoopAsync ( onStep );
-    }
-
-    //----------------------------------------------------------------//
-    async serviceLoopAsync ( onStep ) {
-
-        if ( this.serviceCountdownTimeout ) {
-            this.revocable.revoke ( this.serviceCountdownTimeout );
-            this.serviceCountdownTimeout = false;
-        }
-
-        this.setServiceCountdown ( 0 );
-
-        let count = this.serviceLoopCount || 0;
-        debugLog ( 'SERVICE LOOP RUN:', count );
-        this.serviceLoopCount = count + 1;
-
-        await this.serviceStepAsync ();
-        onStep && onStep ();
-
-        const timeout = 5000;
-
-        this.setServiceCountdown ( 1 );
-        const delay = Math.floor ( timeout / 100 );
-        let i = 0;
-        const countdown = () => {
-            if ( i++ < 100 ) {
-                this.setServiceCountdown ( 1.0 - ( i / 100 ));
-                this.serviceCountdownTimeout = this.revocable.timeout (() => { countdown ()}, delay );
-            }
-        }
-        countdown ();
-
-        this.revocable.timeout (() => { this.serviceLoopAsync ( onStep )}, timeout );
+        await this.serviceLoopAsync ( onStep );
     }
 
     //----------------------------------------------------------------//
@@ -454,8 +455,6 @@ export class ConsensusService {
     //----------------------------------------------------------------//
     @action
     async updateMinerAsync ( minerID ) {
-
-        debugLog ( 'UPDATE MINER', minerID );
 
         const miner = this.minersByID [ minerID ];
 
