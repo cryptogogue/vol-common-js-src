@@ -406,7 +406,8 @@ export class ConsensusService {
     //----------------------------------------------------------------//
     async startServiceLoopAsync ( onStep ) {
 
-        await this.serviceLoopAsync ( onStep );
+        this.serviceLoopAsync ( onStep );
+        await this.waitForUpdateAsync ();
     }
 
     //----------------------------------------------------------------//
@@ -523,5 +524,15 @@ export class ConsensusService {
         }
 
         this.revocable.timeout (() => { this.updateMinerAsync ( minerID )}, 5000 );
+    }
+
+    //----------------------------------------------------------------//
+    async waitForUpdateAsync ( millis ) {
+    
+        const height = this.height;
+        while ( true ) {
+            await this.revocable.sleep ( millis || 500 );
+            if ( height !== this.height ) return;
+        }
     }
 }
