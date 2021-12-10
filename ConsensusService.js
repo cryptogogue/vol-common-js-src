@@ -207,7 +207,7 @@ export class ConsensusService {
         serviceURL.query        = _.cloneDeep ( query || {} );
 
         if ( mostCurrent !== true ) {
-            serviceURL.query.at = this.height;
+            serviceURL.query.at = _.has ( serviceURL.query, 'at' ) ? serviceURL.query.at : this.height;
         }
         return url.format ( serviceURL );
     }
