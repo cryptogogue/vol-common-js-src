@@ -4,6 +4,31 @@ import crypto                           from 'crypto';
 import _                                from 'lodash';
 
 //----------------------------------------------------------------//
+export function calculateTransactionFees ( feeSchedule, txType, gratuity, vol ) {
+
+    const fees = {
+        profitShare:        0,
+        transferTax:        0,
+    }
+
+    if ( feeSchedule ) {
+
+        const feeProfile = feeSchedule.transactionProfiles [ txType ] || feeSchedule.defaultProfile || false;
+        if ( feeProfile ) {
+
+            const calculate = ( amount, percent ) => {
+                if (( percent.factor === 0 ) || ( percent.integer === 0 )) return 0;
+                const shareF = Math.floor ((( amount * percent.factor ) * percent.integer ) / percent.factor ); // I shot the shareF?
+                return Math.floor ( shareF / percent.factor ) + ((( shareF % percent.factor ) == 0 ) ? 0 : 1 );
+            }
+            fees.profitShare        = gratuity ? calculate ( gratuity, feeProfile.profitShare ) : 0;
+            fees.transferTax        = vol ? calculate ( vol, feeProfile.transferTax ) : 0;
+        }
+    }
+    return fees;
+}
+
+//----------------------------------------------------------------//
 export function decodeAccountRequest ( encoded ) {
 
     console.log ( 'DECODE ACCOUNT REQUEST' );
@@ -76,9 +101,11 @@ export function signTransaction ( key, body, nonce ) {
 
     body = _.cloneDeep ( body );
 
-    body.maxHeight      = 0; // don't use for now
-    body.recordBy       = recordBy.toISOString ();
-    body.maker.nonce    = nonce;
+    body.maxHeight          = 0; // don't use for now
+    body.recordBy           = recordBy.toISOString ();
+    if ( body.maker ) {
+        body.maker.nonce    = nonce;
+    }
 
     const bodyStr = JSON.stringify ( body );
 
@@ -86,7 +113,6 @@ export function signTransaction ( key, body, nonce ) {
         body: bodyStr,
         signature: {
             hashAlgorithm:  'SHA256',
-            // digest:         key.hash ( bodyStr ),
             signature:      key.sign ( bodyStr ),
         }
     };

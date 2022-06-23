@@ -163,6 +163,11 @@ export class ConsensusService {
 
         if ( this.height === this.nextHeight ) return;
 
+        debugLog ( 'FIND CONSENSUS' );
+        debugLog ( 'height:', this.height );
+        debugLog ( 'next height:', this.nextHeight );
+
+
         const miners = this.miners.filter (( miner ) => { return miner.nextHeight === this.nextHeight; });
         if ( !miners.length ) return;
 
@@ -285,8 +290,10 @@ export class ConsensusService {
     @computed get
     isOnline () {
 
-        const totalMiners = _.size ( this.minersByID );
-        return totalMiners ? ( this.onlineMiners.length > Math.floor ( totalMiners / 2 )) : false;
+        const totalMiners   = _.size ( this.minersByID );
+        const totalOnline   = this.onlineMiners.length;
+
+        return totalMiners ? ( totalOnline > Math.floor ( totalMiners / 2 )) : false;
     }
 
     //----------------------------------------------------------------//
@@ -419,6 +426,8 @@ export class ConsensusService {
     //----------------------------------------------------------------//
     @action
     updateConsensus () {
+
+        debugLog ( 'UPDATE CONSENSUS' );
 
         this.findConsensus ();
 
