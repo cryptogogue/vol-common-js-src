@@ -1,6 +1,7 @@
 // Copyright (c) 2020 Cryptogogue, Inc. All Rights Reserved.
 
-import *as util                             from './util';
+import * as entitlements                    from './entitlements';
+import * as util                            from './util';
 import * as fgc                             from 'fgc';
 import { action, computed, observable }     from 'mobx';
 
@@ -52,6 +53,24 @@ export class Transaction {
     get uuid                () { return this.body.uuid || ''; }
     get vol                 () { return this.virtual_getSendVOL ? this.virtual_getSendVOL () : 0; }
     get weight              () { return this.virtual_getWeight ? this.virtual_getWeight () : 1; }
+
+    //----------------------------------------------------------------//
+    static checkEntitlement ( type, policy ) {
+
+        if ( policy ) {
+            
+            if ( entitlements.check ( policy, type )) return true;
+
+            switch ( type ) {
+                case TRANSACTION_TYPE.REGISTER_MINER:
+                    return entitlements.check ( policy, 'SELF_REGISTER_MINER' );
+
+                case TRANSACTION_TYPE.SET_ENTITLEMENTS:
+                    return entitlements.check ( policy, 'PUBLISH_SCHEMA' );
+            }
+        }
+        return false;
+    }
 
     //----------------------------------------------------------------//
     constructor ( body ) {

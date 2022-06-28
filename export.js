@@ -1,6 +1,7 @@
 // Copyright (c) 2019 Cryptogogue, Inc. All Rights Reserved.
 
 module.exports = {
+    entitlements:               require ( './entitlements.js' ),
     util:                       require ( './util.js' ),
     ConsensusService:           require ( './ConsensusService.js' ).ConsensusService,
     Transaction:                require ( './Transaction.js' ).Transaction,
