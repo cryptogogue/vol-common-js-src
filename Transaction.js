@@ -30,6 +30,7 @@ export const TRANSACTION_TYPE = {
     SEND_ASSETS:                'SEND_ASSETS',
     SEND_VOL:                   'SEND_VOL',
     STAMP_ASSETS:               'STAMP_ASSETS',
+    SET_ENTITLEMENTS:           'SET_ENTITLEMENTS',
     SET_IDENTITY_PROVIDER:      'SET_IDENTITY_PROVIDER',
     SET_MINIMUM_GRATUITY:       'SET_MINIMUM_GRATUITY',
     SET_TERMS_OF_SERVICE:       'SET_TERMS_OF_SERVICE',
@@ -84,6 +85,7 @@ export class Transaction {
             case TRANSACTION_TYPE.SEND_ASSETS:                  return 'Send Assets';
             case TRANSACTION_TYPE.SEND_VOL:                     return 'Send VOL';
             case TRANSACTION_TYPE.STAMP_ASSETS:                 return 'Stamp Assets';
+            case TRANSACTION_TYPE.SET_ENTITLEMENTS:             return 'Set Entitlements';
             case TRANSACTION_TYPE.SET_IDENTITY_PROVIDER:        return 'Set Identity Provider';
             case TRANSACTION_TYPE.SET_MINIMUM_GRATUITY:         return 'Set Minimum Gratuity';
             case TRANSACTION_TYPE.SET_TERMS_OF_SERVICE:         return 'Set Terms of Service';
