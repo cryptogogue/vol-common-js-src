@@ -45,14 +45,14 @@ export const TRANSACTION_TYPE = {
 export class Transaction {
 
     get accountID           () { return this.maker.accountName; }
-    get cost                () { return ( this.body.maker.gratuity || 0 ) + ( this.body.maker.transferTax || 0 ) + this.vol; }
+    get cost                () { return ( this.body.maker.gratuity || 0 ) + ( this.body.maker.transferTax || 0 ) + this.virtual_getCost (); }
     get friendlyName        () { return Transaction.friendlyNameForType ( this.body.type ); }
     get maker               () { return this.body.maker; }
     get nonce               () { return this.maker.nonce; }
     get type                () { return this.body.type; }
     get uuid                () { return this.body.uuid || ''; }
-    get vol                 () { return this.virtual_getSendVOL ? this.virtual_getSendVOL () : 0; }
-    get weight              () { return this.virtual_getWeight ? this.virtual_getWeight () : 1; }
+    get vol                 () { return this.virtual_getTaxableVOL (); }
+    get weight              () { return this.virtual_getWeight (); }
 
     //----------------------------------------------------------------//
     static checkEntitlement ( type, policy ) {
@@ -118,12 +118,14 @@ export class Transaction {
     static fromBody ( body ) {
 
         switch ( body.type ) {
-            case TRANSACTION_TYPE.BUY_ASSETS:       return new Transaction_BuyAssets ( body );
-            case TRANSACTION_TYPE.OPEN_ACCOUNT:     return new Transaction_OpenAccount ( body );
-            case TRANSACTION_TYPE.RUN_SCRIPT:       return new Transaction_RunScript ( body );
-            case TRANSACTION_TYPE.SEND_VOL:         return new Transaction_SendVOL ( body );
-            case TRANSACTION_TYPE.STAMP_ASSETS:     return new Transaction_StampAssets ( body );
-            default:                                return new Transaction ( body );
+            case TRANSACTION_TYPE.BUY_ASSETS:           return new Transaction_BuyAssets ( body );
+            case TRANSACTION_TYPE.IDENTIFY_ACCOUNT:     return new Transaction_IdentifyAccount ( body );
+            case TRANSACTION_TYPE.NEW_ACCOUNT:          return new Transaction_NewAccount ( body );
+            case TRANSACTION_TYPE.OPEN_ACCOUNT:         return new Transaction_OpenAccount ( body );
+            case TRANSACTION_TYPE.RUN_SCRIPT:           return new Transaction_RunScript ( body );
+            case TRANSACTION_TYPE.SEND_VOL:             return new Transaction_SendVOL ( body );
+            case TRANSACTION_TYPE.STAMP_ASSETS:         return new Transaction_StampAssets ( body );
+            default:                                    return new Transaction ( body );
         }
     }
 
@@ -182,6 +184,24 @@ export class Transaction {
 
         this.body.weight    = weight;
     }
+
+    //----------------------------------------------------------------//
+    virtual_getCost () {
+
+        return 0;
+    }
+
+    //----------------------------------------------------------------//
+    virtual_getTaxableVOL () {
+
+        return Math.abs ( this.virtual_getCost ());
+    }
+
+    //----------------------------------------------------------------//
+    virtual_getWeight () {
+
+        return 1;
+    }
 };
 
 //================================================================//
@@ -190,9 +210,33 @@ export class Transaction {
 class Transaction_BuyAssets extends Transaction {
 
     //----------------------------------------------------------------//
-    virtual_getSendVOL () {
+    virtual_getCost () {
 
         return this.body.price || 0;
+    }
+};
+
+//================================================================//
+// Transaction_IdentifyAccount
+//================================================================//
+class Transaction_IdentifyAccount extends Transaction {
+
+    //----------------------------------------------------------------//
+    virtual_getCost () {
+
+        return -this.body.grant || 0;
+    }
+};
+
+//================================================================//
+// Transaction_NewAccount
+//================================================================//
+class Transaction_NewAccount extends Transaction {
+
+    //----------------------------------------------------------------//
+    virtual_getCost () {
+
+        return -this.body.grant || 0;
     }
 };
 
@@ -202,7 +246,7 @@ class Transaction_BuyAssets extends Transaction {
 class Transaction_OpenAccount extends Transaction {
 
     //----------------------------------------------------------------//
-    virtual_getSendVOL () {
+    virtual_getCost () {
 
         return this.body.grant || 0;
     }
@@ -226,7 +270,7 @@ class Transaction_RunScript extends Transaction {
 class Transaction_SendVOL extends Transaction {
 
     //----------------------------------------------------------------//
-    virtual_getSendVOL () {
+    virtual_getCost () {
 
         return this.body.amount || 0;
     }
@@ -238,7 +282,7 @@ class Transaction_SendVOL extends Transaction {
 class Transaction_StampAssets extends Transaction {
 
     //----------------------------------------------------------------//
-    virtual_getSendVOL () {
+    virtual_getCost () {
 
         return this.body.price * this.body.assetIdentifiers.length;
     }
